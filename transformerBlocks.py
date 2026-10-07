@@ -140,20 +140,39 @@ class Transformer(nn.Module):
         output = self.fc(pooled_output)
         return output.squeeze(-1)
 
-def getWeights(xTrain,yTrain,xTest,yTest,batch_size):
+def getWeights(xTrain, yTrain, batch_size, valid_frac=0.2, random_state=None):
+    """
+    Fit the RR model used to derive attention feature_weights / pooling_weights
+    for the transformer.
 
+    IMPORTANT (independence): the alpha search and coefficient estimation here
+    must never see the fold the transformer will later be evaluated on. The
+    previous version of this function took xTest/yTest and picked alpha by
+    correlating predictions against that held-out fold -- i.e. the weights
+    baked into the transformer's attention mechanism were partly chosen using
+    the data the transformer is tested on. That's the leakage flagged in
+    revision item #1. Fixed by carving the alpha-selection validation split
+    out of the TRAINING fold only; xTest/yTest are no longer parameters.
+    """
     batch_size = batch_size
+
+    # inner split carved out of the training fold only -- xTest/yTest (the
+    # held-out location) are never touched anywhere in this function.
+    xFit, xInnerValid, yFit, yInnerValid = train_test_split(
+        xTrain, yTrain, test_size=valid_frac, shuffle=True, random_state=random_state
+    )
+
     alpha_values = {}
     params = [0.01, 0.1, 1, 10, 100, 1000]
     for value in params:
         LR = linear_model.Ridge(value)
-        LR.fit(xTrain, yTrain)
-        y_pred = LR.predict(xTest)
-        yTest = np.array(yTest)
-        alpha_values[value] = np.corrcoef(y_pred, yTest)[0, 1]
-        alpha_val = max(alpha_values, key=alpha_values.get)
+        LR.fit(xFit, yFit)
+        y_pred = LR.predict(xInnerValid)
+        alpha_values[value] = np.corrcoef(y_pred, np.array(yInnerValid))[0, 1]
+    alpha_val = max(alpha_values, key=alpha_values.get)
 
-    # Ridge regression to get the coefficients (feature weights)
+    # Refit on the FULL training fold (still no test-fold data) using the
+    # alpha selected above, to get the coefficients used as feature/pooling weights.
     RR = linear_model.Ridge(alpha_val)
     RR.fit(xTrain, yTrain)
     coeffs = RR.coef_
@@ -161,14 +180,13 @@ def getWeights(xTrain,yTrain,xTest,yTest,batch_size):
     min_val = coeffs.min()
     max_val = coeffs.max()
     scaled_coeffs = (coeffs - min_val) / (max_val - min_val)
-    
 
     feature_weights = torch.tensor(scaled_coeffs, dtype=torch.float32)
     pooling_weights = torch.tensor(coeffs,dtype=torch.float32)
     feature_weights = feature_weights.view(1, -1).expand(batch_size, -1)
     pooling_weights = pooling_weights.view(1,-1).expand(batch_size,-1)
 
-    return feature_weights, pooling_weights
+    return feature_weights, pooling_weights, alpha_val
 
 def preprocess(data):
     

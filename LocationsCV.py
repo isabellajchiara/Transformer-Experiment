@@ -13,10 +13,28 @@ def train_fold(loc, data, unique):
     xTest = test.drop(["Unnamed: 0","x","taxa","loc","pheno"],axis=1)
     yTest = test["pheno"]
 
+    # Germplasm independence check (revision item #1): leave-one-location-out
+    # CV is expected to re-test the SAME genotypes across locations (that's
+    # the point of a multi-environment trial), but it should be reported
+    # explicitly rather than assumed, so it's visible in the record rather
+    # than only in the written Methods description.
+    train_taxa = set(train["taxa"])
+    test_taxa = set(test["taxa"])
+    shared_taxa = train_taxa & test_taxa
+    print(
+        f"Fold (held-out loc={loc}): {len(test_taxa)} taxa in test, "
+        f"{len(shared_taxa)} of them ({len(shared_taxa)/max(len(test_taxa),1):.1%}) "
+        f"also appear in the training set (other locations)."
+    )
+
     batch_size = 15
-    
-    #compute feature weights using training data
-    feature_weights,pooling_weights= getWeights(xTrain,yTrain,xTest,yTest,batch_size)
+
+    #compute feature weights using training data only -- getWeights() no longer
+    #takes xTest/yTest, so the held-out location can never influence alpha
+    #selection or the resulting attention/pooling weights (fixes the leakage
+    #in revision item #1).
+    feature_weights, pooling_weights, chosen_alpha = getWeights(xTrain, yTrain, batch_size)
+    print(f"Fold (held-out loc={loc}): RR alpha selected from training-only split = {chosen_alpha}")
 
     # Prepare tensors and dataloaders
 
