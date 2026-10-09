@@ -4,7 +4,8 @@ exec(open("transformerBlocks.py").read())
 import concurrent.futures
 np.random.seed(126)  
 
-def train_fold(loc, data, unique):
+def train_fold(loc, fold_num, data, unique):
+    global criterion
 
     test = data[data["loc"] == loc]
     train = data[data["loc"] != loc] 
@@ -78,7 +79,7 @@ def train_fold(loc, data, unique):
         transformer.train()
         train_loss = 0
 
-        for batch_x, batch_y in valid_loader:
+        for batch_x, batch_y in train_loader:
             batch_y = batch_y.squeeze(-1)
             optimizer.zero_grad()
             estimations = transformer(batch_x)
@@ -113,9 +114,9 @@ def train_fold(loc, data, unique):
         val_accuracies.append(val_accuracy)
         
         current_lr = optimizer.param_groups[0]['lr']
-        print(f"Fold {fold}, Epoch {epoch} | Train Loss: {avg_train_loss:.4f} | Val Loss: {avg_val_loss:.4f} | Val Accuracy: {val_accuracy:.4f} | LR: {current_lr:.6f}")
+        print(f"Fold {fold_num}, Epoch {epoch} | Train Loss: {avg_train_loss:.4f} | Val Loss: {avg_val_loss:.4f} | Val Accuracy: {val_accuracy:.4f} | LR: {current_lr:.6f}")
 
-    loss_csv_file = f"SY_optim_loss_fold{fold}_CDBN_Locations.csv"
+    loss_csv_file = f"SY_optim_loss_fold{fold_num}_CDBN_Locations.csv"
     with open(loss_csv_file, mode='w', newline='') as file:
         writer = csv.writer(file)
         writer.writerow(["Epoch", "Train Loss", "Validation Loss", "Validation Accuracy"])
@@ -127,9 +128,9 @@ def train_fold(loc, data, unique):
     values= pd.DataFrame(values)
     values.to_csv(f"pred_true_SY_BLB_{loc}.csv")
 
-    print(f"Finished fold {fold}")
-    
-    return fold_result
+    print(f"Finished fold {fold_num}")
+
+    return loc, fold_result
 
 
 # Load and preprocess the data
@@ -148,17 +149,17 @@ cv_results = []
 # Use ProcessPoolExecutor to run folds in parallel
 with concurrent.futures.ProcessPoolExecutor() as executor:
     futures = []
-    fold = 1
-    for loc in locations:
-        futures.append(executor.submit(train_fold, loc, data, unique))
+    for i, loc in enumerate(locations):
+        futures.append(executor.submit(train_fold, loc, i + 1, data, unique))
     # Collect the results
     for future in concurrent.futures.as_completed(futures):
         cv_results.append(future.result())
 
-# Save accuracies for each fold
-final_df = pd.DataFrame({
-    "Location": location_names,
-    "Accuracy": cv_results
-})
+# Save accuracies for each fold (loc paired with its own result, not
+# positional against `locations` -- as_completed() yields out of submission
+# order, so train_fold returning (loc, fold_result) is what keeps these
+# correctly matched, same as LocationsCV_TFnoRR.py / LocationsCV_NN.py).
+final_df = pd.DataFrame(cv_results, columns=["Location", "Accuracy"])
 
-final_df.to_csv("SY_CV_Accuracies_CDBN_Locations.csv", index=False)         
+final_df.to_csv("SY_CV_Accuracies_CDBN_Locations.csv", index=False)
+
